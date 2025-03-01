@@ -39,7 +39,7 @@ var moveToIndex = map[byte]int{
 }
 
 // depthToElement converteert een diepte naar een element
-var depthToElement = [6]byte{'W', 'W', 'V', 'A', 'L', 'D'}
+var depthToElement = [6]byte{'D', 'W', 'V', 'A', 'L', 'D'}
 
 // Player houdt de staat van een speler bij
 type Player struct {
@@ -379,6 +379,7 @@ func evaluateBatch(engines []string, inputEngines []string, expectedResult strin
 // evaluateBatchClose evalueert een batch van engines voor "nooit verliezen"
 func evaluateBatchClose(engines []string, inputEngines []string, resultChan chan<- engineResult, progress *int32) {
 	for _, engine := range engines {
+		neverLoses := true
 		totalScore := 0
 
 		for _, inputEngine := range inputEngines {
@@ -393,17 +394,20 @@ func evaluateBatchClose(engines []string, inputEngines []string, resultChan chan
 			} else {
 				result, p1Score, p2Score = simulateDepthGame(engine, inputEngine)
 			}
-			if result == -1 || result == 2 {
-				break // Early exit on loss
+			if result == -1 || result == 2 { // Verlies of ongeldig
+				neverLoses = false
+				break
 			}
 			if result == 1 {
 				totalScore += p1Score - p2Score
-			} else {
+			} else { // Draw (result == 0)
 				totalScore += p1Score
 			}
 		}
 
-		resultChan <- engineResult{engine: engine, score: totalScore}
+		if neverLoses {
+			resultChan <- engineResult{engine: engine, score: totalScore}
+		}
 	}
 	atomic.AddInt32(progress, int32(len(engines)))
 }
@@ -581,16 +585,17 @@ func main() {
 			fmt.Printf("We found %d engines / %d total generated engines who %s from all input engines\n",
 				len(matchingEngines), len(generatedEngines), strings.ToLower(expectedResult))
 		} else {
-			fmt.Printf("No wins to all found. Do you want to search for the best engine close to all wins? (y/.): ")
+			fmt.Printf("No engines found that %s against all input engines. Do you want to search for the best engine that never loses (win or draw)? (y/.): ", strings.ToLower(expectedResult))
 			var response string
 			fmt.Scanln(&response)
 			if response == "y" {
+				// Reset progress for the second run
+				atomic.StoreInt32(&progress, 0)
 				// Pre-allocate for close results
 				matchingEnginesClose := make([]engineResult, 0, 34894)
 				resultChanClose := make(chan engineResult, maxBufferSize)
 
 				var wgClose sync.WaitGroup
-				progress = 0
 				doneClose := make(chan struct{})
 
 				startTime = time.Now()
