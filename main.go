@@ -214,67 +214,52 @@ func simulateFixedGame(engine1, engine2 string) (result int, p1Score, p2Score in
 	return 0, p1Score, p2Score
 }
 
-// generateWithLastDigit genereert een engine, van voor naar achter, max 1 '5' (alle laatste cijfers 1-5)
 func generateWithLastDigit(prefix string, length int, hasUsedFive bool, engines *[]string) {
-	if length == 0 {
-		if len(prefix) == 12 {
-			// Debug: Controleer of we engines zoals 331211513334 genereren
-			// fmt.Printf("Generated engine: %s\n", prefix)
-			*engines = append(*engines, prefix)
-		}
-		return
-	}
-	for digit := '5'; digit >= '1'; digit-- { // Genereren van achter naar voor (5 naar 1, alle cijfers 1-5)
-		if digit == '5' && !hasUsedFive {
-			newPrefix := string(digit) + prefix
-			generateWithLastDigit(newPrefix, length-1, true, engines)
-		} else if digit != '5' {
-			newPrefix := string(digit) + prefix
-			generateWithLastDigit(newPrefix, length-1, hasUsedFive, engines)
-		}
-	}
+    if length == 0 {
+        if len(prefix) == 12 {
+            *engines = append(*engines, prefix)
+        }
+        return
+    }
+    for digit := '5'; digit >= '1'; digit-- {
+        if digit == '5' && !hasUsedFive {
+            newPrefix := prefix + string(digit) // Voeg toe aan het einde
+            generateWithLastDigit(newPrefix, length-1, true, engines)
+        } else if digit != '5' {
+            newPrefix := prefix + string(digit) // Voeg toe aan het einde
+            generateWithLastDigit(newPrefix, length-1, hasUsedFive, engines)
+        }
+    }
 }
 
-// generateEngines genereert alle engine codes met max 1 '5', van voor naar achter (geen restrictie op laatste cijfer)
 func generateEngines(startDepth string) []string {
-	var engines []string
-	remainingLength := 12 - len(startDepth)
-	hasFive := strings.Contains(startDepth, "5")
+    var engines []string
+    remainingLength := 12 - len(startDepth)
+    hasFive := strings.Contains(startDepth, "5")
 
-	if remainingLength < 0 {
-		return engines
-	}
+    if remainingLength < 0 {
+        return engines
+    }
 
-	if startDepth != "" {
-		// Valideer startDepth (alleen dieptes 1-5)
-		for _, digit := range startDepth {
-			if digit < '1' || digit > '5' {
-				return engines // Ongeldige startdepth, retourneer lege lijst
-			}
-		}
-		if len(startDepth) > 12 {
-			return engines // Ongeldige startdepth, retourneer lege lijst
-		}
-		// Vul startDepth aan tot 12 cijfers met '5' als placeholder (genereren van achter naar voor, alle cijfers 1-5)
-		prefix := ""
-		for i := 0; i < 12-len(startDepth); i++ {
-			prefix = "5" + prefix // Start met 5, genereren van achter naar voor
-		}
-		prefix = startDepth + prefix
-		hasFive = strings.Contains(prefix, "5")
-		// Genereer engines, van voor naar achter
-		generateWithLastDigit(prefix, remainingLength, hasFive, &engines)
-	} else {
-		// Genereer alle engines van 12 posities, beginnend met 1-5, van voor naar achter
-		for firstDigit := '5'; firstDigit >= '1'; firstDigit-- { // Genereren van achter naar voor (5 naar 1)
-			prefix := string(firstDigit)
-			hasFiveLocal := firstDigit == '5'
-			// Genereer engines
-			generateWithLastDigit(prefix, 11, hasFiveLocal, &engines)
-		}
-	}
+    if startDepth != "" {
+        for _, digit := range startDepth {
+            if digit < '1' || digit > '5' {
+                return engines
+            }
+        }
+        if len(startDepth) > 12 {
+            return engines
+        }
+        generateWithLastDigit(startDepth, remainingLength, hasFive, &engines)
+    } else {
+        for firstDigit := '5'; firstDigit >= '1'; firstDigit-- {
+            prefix := string(firstDigit)
+            hasFiveLocal := firstDigit == '5'
+            generateWithLastDigit(prefix, 11, hasFiveLocal, &engines)
+        }
+    }
 
-	return engines
+    return engines
 }
 
 // simulateDepthGameToMoves genereert de zetten van een diepte-gebaseerde engine, reactief op de tegenstander
