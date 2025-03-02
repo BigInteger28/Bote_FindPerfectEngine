@@ -38,8 +38,8 @@ var moveToIndex = map[byte]int{
 	'D': 4,
 }
 
-// depthToElement converteert een diepte naar een element
-var depthToElement = [6]byte{'D', 'W', 'V', 'A', 'L', 'D'}
+// depthToElement converteert een diepte naar een element (alleen dieptes 1-5)
+var depthToElement = [5]byte{'W', 'V', 'A', 'L', 'D'}
 
 // Player houdt de staat van een speler bij
 type Player struct {
@@ -57,7 +57,13 @@ type engineResult struct {
 
 // getElementFromCode haalt direct een element op basis van de engine code voor de eerste zet
 func getElementFromCode(depth int) byte {
-	return depthToElement[depth]
+	if depth < 1 || depth > 5 {
+		return 0 // Ongeldige diepte, retourneer 0 (ongeldige move)
+	}
+	if depth == 5 {
+		return 'D' // Speciaal geval voor diepte 5
+	}
+	return depthToElement[depth-1] // Offset met 1 omdat depthToElement nu 1-4 is voor 'W', 'V', 'A', 'L'
 }
 
 // getElementByDepth berekent het volgende element gebaseerd op vorig element en diepte
@@ -208,7 +214,28 @@ func simulateFixedGame(engine1, engine2 string) (result int, p1Score, p2Score in
 	return 0, p1Score, p2Score
 }
 
-// generateEngines genereert alle engine codes met max 1 '5'
+// generateWithLastDigit genereert een engine, van voor naar achter, max 1 '5' (alle laatste cijfers 1-5)
+func generateWithLastDigit(prefix string, length int, hasUsedFive bool, engines *[]string) {
+	if length == 0 {
+		if len(prefix) == 12 {
+			// Debug: Controleer of we engines zoals 331211513334 genereren
+			// fmt.Printf("Generated engine: %s\n", prefix)
+			*engines = append(*engines, prefix)
+		}
+		return
+	}
+	for digit := '5'; digit >= '1'; digit-- { // Genereren van achter naar voor (5 naar 1, alle cijfers 1-5)
+		if digit == '5' && !hasUsedFive {
+			newPrefix := string(digit) + prefix
+			generateWithLastDigit(newPrefix, length-1, true, engines)
+		} else if digit != '5' {
+			newPrefix := string(digit) + prefix
+			generateWithLastDigit(newPrefix, length-1, hasUsedFive, engines)
+		}
+	}
+}
+
+// generateEngines genereert alle engine codes met max 1 '5', van voor naar achter (geen restrictie op laatste cijfer)
 func generateEngines(startDepth string) []string {
 	var engines []string
 	remainingLength := 12 - len(startDepth)
@@ -218,69 +245,36 @@ func generateEngines(startDepth string) []string {
 		return engines
 	}
 
-	if hasFive {
-		totalCombinations := intPow(4, remainingLength)
-		engines = make([]string, 0, totalCombinations)
-		for i := 0; i < totalCombinations; i++ {
-			suffix := base4ToDecimal(i, remainingLength)
-			engine := startDepth + suffix
-			engines = append(engines, engine)
+	if startDepth != "" {
+		// Valideer startDepth (alleen dieptes 1-5)
+		for _, digit := range startDepth {
+			if digit < '1' || digit > '5' {
+				return engines // Ongeldige startdepth, retourneer lege lijst
+			}
 		}
+		if len(startDepth) > 12 {
+			return engines // Ongeldige startdepth, retourneer lege lijst
+		}
+		// Vul startDepth aan tot 12 cijfers met '5' als placeholder (genereren van achter naar voor, alle cijfers 1-5)
+		prefix := ""
+		for i := 0; i < 12-len(startDepth); i++ {
+			prefix = "5" + prefix // Start met 5, genereren van achter naar voor
+		}
+		prefix = startDepth + prefix
+		hasFive = strings.Contains(prefix, "5")
+		// Genereer engines, van voor naar achter
+		generateWithLastDigit(prefix, remainingLength, hasFive, &engines)
 	} else {
-		totalCombinations := intPow(4, remainingLength)
-		extraCombinations := remainingLength * intPow(4, remainingLength-1)
-		engines = make([]string, 0, totalCombinations+extraCombinations)
-		for i := 0; i < totalCombinations; i++ {
-			suffix := base4ToDecimal(i, remainingLength)
-			engine := startDepth + suffix
-			engines = append(engines, engine)
-		}
-
-		for pos := 0; pos < remainingLength; pos++ {
-			baseCombinations := intPow(4, remainingLength-1)
-			for i := 0; i < baseCombinations; i++ {
-				suffix := base4ToDecimal(i, remainingLength-1)
-				engine := startDepth + suffix[:pos] + "5" + suffix[pos:]
-				engines = append(engines, engine)
-			}
-		}
-	}
-
-	if startDepth == "" {
-		engines = make([]string, 0, intPow(4, 12)+12*intPow(4, 11))
-		for i := 0; i < intPow(4, 12); i++ {
-			engine := base4ToDecimal(i, 12)
-			engines = append(engines, engine)
-		}
-		for pos := 0; pos < 12; pos++ {
-			for i := 0; i < intPow(4, 11); i++ {
-				suffix := base4ToDecimal(i, 11)
-				engine := suffix[:pos] + "5" + suffix[pos:]
-				engines = append(engines, engine)
-			}
+		// Genereer alle engines van 12 posities, beginnend met 1-5, van voor naar achter
+		for firstDigit := '5'; firstDigit >= '1'; firstDigit-- { // Genereren van achter naar voor (5 naar 1)
+			prefix := string(firstDigit)
+			hasFiveLocal := firstDigit == '5'
+			// Genereer engines
+			generateWithLastDigit(prefix, 11, hasFiveLocal, &engines)
 		}
 	}
 
 	return engines
-}
-
-// base4ToDecimal converteert een decimaal naar een base-4 string (1-4)
-func base4ToDecimal(num, length int) string {
-	digits := make([]byte, length)
-	for i := length - 1; i >= 0; i-- {
-		digits[i] = byte((num % 4) + 1 + '0')
-		num /= 4
-	}
-	return string(digits)
-}
-
-// intPow berekent base^exp
-func intPow(base, exp int) int {
-	result := 1
-	for i := 0; i < exp; i++ {
-		result *= base
-	}
-	return result
 }
 
 // simulateDepthGameToMoves genereert de zetten van een diepte-gebaseerde engine, reactief op de tegenstander
@@ -349,23 +343,20 @@ func evaluateBatch(engines []string, inputEngines []string, expectedResult strin
 				continue // Skip invalid engines, but don't return early
 			}
 			if expectedResult == "Win" {
-				if result != 1 {
-					break // Early exit on loss
+				if result == 1 {
+					matches++
+					totalScore += p1Score - p2Score
 				}
-				matches++
-				totalScore += p1Score - p2Score
 			} else if expectedResult == "Draw" {
-				if result != 0 {
-					break
+				if result == 0 {
+					matches++
+					totalScore += p1Score
 				}
-				matches++
-				totalScore += p1Score
 			} else if expectedResult == "Lose" {
-				if result != 2 {
-					break
+				if result == 2 {
+					matches++
+					totalScore += p2Score - p1Score
 				}
-				matches++
-				totalScore += p2Score - p1Score
 			}
 		}
 
@@ -496,16 +487,16 @@ func main() {
 		generatedEngines := generateEngines(startDepth)
 
 		const bytesPerResult = 24
-		maxBufferSize := (maxMemoryMB * 1024 * 1024) / bytesPerResult
+		maxBufferSize := (maxMemoryMB * 1024 * 1024) / bytesPerResult // Bijv. 128,000 MB → ~5,368,709,120
 		if maxBufferSize > len(generatedEngines) {
 			maxBufferSize = len(generatedEngines)
 		}
-		if maxBufferSize < 1000 {
-			maxBufferSize = 1000
+		if maxBufferSize < 10000 { // Verhoog minimum naar 10,000 voor grotere batches
+			maxBufferSize = 10000
 		}
 
 		// Pre-allocate matching results
-		matchingEngines := make([]engineResult, 0, 34894) // Based on your correct count
+		matchingEngines := make([]engineResult, 0, 67108864) // Groter pre-alloceren voor alle mogelijke engines (max 1 '5')
 		resultChan := make(chan engineResult, maxBufferSize)
 
 		// Eerste poging: zoek engines die alles winnen
@@ -592,7 +583,7 @@ func main() {
 				// Reset progress for the second run
 				atomic.StoreInt32(&progress, 0)
 				// Pre-allocate for close results
-				matchingEnginesClose := make([]engineResult, 0, 34894)
+				matchingEnginesClose := make([]engineResult, 0, 67108864)
 				resultChanClose := make(chan engineResult, maxBufferSize)
 
 				var wgClose sync.WaitGroup
