@@ -243,7 +243,6 @@ func generateEngines(startDepth string) []string {
 		return engines
 	}
 
-	// Genereer engines iteratief met for-lussen, laatste cijfer 1 of 3, alleen dieptes 1-4
 	if startDepth != "" {
 		// Valideer startDepth (alleen dieptes 1-5)
 		for _, digit := range startDepth {
@@ -254,20 +253,13 @@ func generateEngines(startDepth string) []string {
 		if len(startDepth) > 12 {
 			return engines // Ongeldige startdepth, retourneer lege lijst
 		}
-		// Vul startDepth aan tot 12 cijfers met '1' als placeholder
-		prefix := startDepth
-		for len(prefix) < 12 {
-			prefix += "1"
-		}
-		hasFive = strings.Contains(prefix, "5")
-		// Genereer de resterende posities (alleen 1-4, laatste moet 1 of 3)
-		generateRemaining(prefix, len(startDepth), hasFive, &engines)
+		generateRemaining(startDepth, remainingLength, hasFive, &engines)
 	} else {
 		// Genereer alle engines van 12 posities, beginnend met 1-5, laatste cijfer 1 of 3
 		for firstDigit := '1'; firstDigit <= '5'; firstDigit++ {
 			prefix := string(firstDigit)
 			hasFiveLocal := firstDigit == '5'
-			generateRemaining(prefix, 1, hasFiveLocal, &engines)
+			generateRemaining(prefix, 11, hasFiveLocal, &engines)
 		}
 	}
 
@@ -275,41 +267,28 @@ func generateEngines(startDepth string) []string {
 }
 
 // generateRemaining genereert de resterende posities iteratief
-func generateRemaining(prefix string, startPos int, hasUsedFive bool, engines *[]string) {
-	currentLen := len(prefix)
-	for i := startPos; i < 12; i++ {
-		// Controleer of we een geldige index hebben voor prefix[i-1]
-		var lastDigit byte
-		if i-1 < currentLen {
-			lastDigit = prefix[i-1]
-		} else {
-			lastDigit = '1' // Standaardwaarde als prefix nog niet lang genoeg is
+func generateRemaining(prefix string, remainingLength int, hasUsedFive bool, engines *[]string) {
+	if remainingLength == 0 {
+		if len(prefix) == 12 && (prefix[11] == '1' || prefix[11] == '3') {
+			*engines = append(*engines, prefix)
 		}
-		if i == 11 { // Laatste positie, forceer 1 of 3
-			if lastDigit == '1' || lastDigit == '3' {
-				*engines = append(*engines, prefix)
-			}
-		} else {
-			for digit := '1'; digit <= '4'; digit++ {
-				newPrefix := prefix + string(digit) // Voeg digit toe aan het einde
-				if i == 11 && (digit == '1' || digit == '3') {
-					*engines = append(*engines, newPrefix)
-				} else if i < 11 {
-					generateRemaining(newPrefix, i+1, hasUsedFive, engines)
-				}
-			}
-			if !hasUsedFive && i < 11 {
-				newPrefix := prefix + "5" // Voeg '5' toe aan het einde
-				for digit := '1'; digit <= '4'; digit++ {
-					newPrefix2 := newPrefix + string(digit)
-					if i == 11 && (digit == '1' || digit == '3') {
-						*engines = append(*engines, newPrefix2)
-					} else if i < 11 {
-						generateRemaining(newPrefix2, i+1, true, engines)
-					}
-				}
-			}
-		}
+		return
+	}
+
+	if remainingLength == 1 { // Laatste positie, forceer 1 of 3
+		generateRemaining(prefix+"1", remainingLength-1, hasUsedFive, engines)
+		generateRemaining(prefix+"3", remainingLength-1, hasUsedFive, engines)
+		return
+	}
+
+	// Normale posities (niet de laatste)
+	for digit := '1'; digit <= '4'; digit++ {
+		newPrefix := prefix + string(digit)
+		generateRemaining(newPrefix, remainingLength-1, hasUsedFive, engines)
+	}
+	if !hasUsedFive {
+		newPrefix := prefix + "5"
+		generateRemaining(newPrefix, remainingLength-1, true, engines)
 	}
 }
 
@@ -457,13 +436,13 @@ func main() {
 		}
 
 		// Standaard RAM-instelling
-		fmt.Println("Voer het maximale geheugen in MB in (1-128000, default 128000): ")
+		fmt.Println("Voer het maximale geheugen in MB in (1-512000, default 128000): ")
 		var memoryInput string
 		fmt.Scanln(&memoryInput)
 		if memoryInput == "" {
 			maxMemoryMB = 128000 // Standaardwaarde
-		} else if n, err := fmt.Sscanf(memoryInput, "%d", &maxMemoryMB); err != nil || n != 1 || maxMemoryMB < 1 || maxMemoryMB > 128000 {
-			maxMemoryMB = 128000 // Default naar 128,000 MB als invoer ongeldig
+		} else if n, err := fmt.Sscanf(memoryInput, "%d", &maxMemoryMB); err != nil || n != 1 || maxMemoryMB < 1 || maxMemoryMB > 512000 {
+			maxMemoryMB = 512000 // Default naar 128,000 MB als invoer ongeldig
 			fmt.Println("Ongeldige invoer, defaulting naar 128,000 MB.")
 		}
 
@@ -502,7 +481,7 @@ func main() {
 		}(len(generatedEngines))
 
 		startTime = time.Now()
-		const numThreads = 16 // Standaard op 16 threads
+		const numThreads = 32 // Standaard op 16 threads
 		enginesPerThread := (len(generatedEngines) + numThreads - 1) / numThreads // Gelijkmatige verdeling
 
 		for i := 0; i < numThreads; i++ {
