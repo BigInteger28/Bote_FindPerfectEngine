@@ -233,7 +233,7 @@ func simulateFixedGame(engine1, engine2 string) (p1Score, p2Score int) {
 	return p1Score, p2Score
 }
 
-// generateEngines genereert alle engine codes met max 1 '5' en laatste cijfer 1 of 3, alleen dieptes 1-4
+// generateEngines genereert alle engine codes met max 1 '5', alle dieptes 1-5
 func generateEngines(startDepth string) []string {
 	var engines []string
 	remainingLength := 12 - len(startDepth)
@@ -255,7 +255,7 @@ func generateEngines(startDepth string) []string {
 		}
 		generateRemaining(startDepth, remainingLength, hasFive, &engines)
 	} else {
-		// Genereer alle engines van 12 posities, beginnend met 1-5, laatste cijfer 1 of 3
+		// Genereer alle engines van 12 posities, beginnend met 1-5
 		for firstDigit := '1'; firstDigit <= '5'; firstDigit++ {
 			prefix := string(firstDigit)
 			hasFiveLocal := firstDigit == '5'
