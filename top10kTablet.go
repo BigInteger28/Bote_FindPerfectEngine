@@ -269,26 +269,18 @@ func generateEngines(startDepth string) []string {
 // generateRemaining genereert de resterende posities iteratief
 func generateRemaining(prefix string, remainingLength int, hasUsedFive bool, engines *[]string) {
 	if remainingLength == 0 {
-		if len(prefix) == 12 && (prefix[11] == '1' || prefix[11] == '3') {
+		if len(prefix) == 12 {
 			*engines = append(*engines, prefix)
 		}
 		return
 	}
-
-	if remainingLength == 1 { // Laatste positie, forceer 1 of 3
-		generateRemaining(prefix+"1", remainingLength-1, hasUsedFive, engines)
-		generateRemaining(prefix+"3", remainingLength-1, hasUsedFive, engines)
-		return
-	}
-
-	// Normale posities (niet de laatste)
-	for digit := '1'; digit <= '4'; digit++ {
+	
+	for digit := '1'; digit <= '5'; digit++ {
+	    if digit == '5' && hasUsedFive {
+	        continue
+	    }
 		newPrefix := prefix + string(digit)
-		generateRemaining(newPrefix, remainingLength-1, hasUsedFive, engines)
-	}
-	if !hasUsedFive {
-		newPrefix := prefix + "5"
-		generateRemaining(newPrefix, remainingLength-1, true, engines)
+		generateRemaining(newPrefix, remainingLength-1, hasUsedFive || digit == '5', engines)
 	}
 }
 
