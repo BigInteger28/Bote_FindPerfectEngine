@@ -269,26 +269,19 @@ func generateEngines(startDepth string) []string {
 // generateRemaining genereert de resterende posities iteratief
 func generateRemaining(prefix string, remainingLength int, hasUsedFive bool, engines *[]string) {
 	if remainingLength == 0 {
-		if len(prefix) == 12 && (prefix[11] == '1' || prefix[11] == '3') {
+		if len(prefix) == 12 {
 			*engines = append(*engines, prefix)
 		}
 		return
 	}
 
-	if remainingLength == 1 { // Laatste positie, forceer 1 of 3
-		generateRemaining(prefix+"1", remainingLength-1, hasUsedFive, engines)
-		generateRemaining(prefix+"3", remainingLength-1, hasUsedFive, engines)
-		return
-	}
-
-	// Normale posities (niet de laatste)
-	for digit := '1'; digit <= '4'; digit++ {
+	// Gebruik alle dieptes 1-5, rekening houdend met max één '5'
+	for digit := '1'; digit <= '5'; digit++ {
+		if digit == '5' && hasUsedFive {
+			continue // Skip 5 als we er al een hebben
+		}
 		newPrefix := prefix + string(digit)
-		generateRemaining(newPrefix, remainingLength-1, hasUsedFive, engines)
-	}
-	if !hasUsedFive {
-		newPrefix := prefix + "5"
-		generateRemaining(newPrefix, remainingLength-1, true, engines)
+		generateRemaining(newPrefix, remainingLength-1, hasUsedFive || digit == '5', engines)
 	}
 }
 
@@ -371,15 +364,13 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
 				heap.Push(h, result)
 			}
 		}
-		atomic.AddInt32(progress, 1) // Update progress per engine
+		atomic.AddInt32(progress, int32(len(inputEngines))) // Tel aantal inputEngines per engine
 	}
 
-	// Verzamel top 10,000 in volgorde (hoogste naar laagste score)
 	top10000 := make([]engineResult, 0, maxSize)
 	for h.Len() > 0 {
 		top10000 = append(top10000, heap.Pop(h).(engineResult))
 	}
-	// Geen reverse nodig, omdat max-heap al hoogste naar laagste sorteert
 
 	for _, result := range top10000 {
 		top10000Chan <- result
@@ -467,23 +458,27 @@ func main() {
 		var wg sync.WaitGroup
 		var progress int32
 
+		// Totaal aantal te evalueren combinaties: generatedEngines * inputEngines
+		totalEngines := len(generatedEngines) * len(inputEngines)
+
 		var startTime time.Time
-		go func(totalEngines int) {
+		go func(total int) {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
 			for {
 				select {
 				case t := <-ticker.C:
 					p := atomic.LoadInt32(&progress)
-					if p > 0 && p <= int32(totalEngines) {
-						speed := float64(p) / t.Sub(startTime).Seconds()
-						fmt.Printf("Progress: %d / %d engines (%.2f%%), Speed: %.0f engines/s\n", p, totalEngines, float64(p)/float64(totalEngines)*100, speed)
+					if p > 0 && p <= int32(total) {
+						speed := float64(p) / t.Sub(startTime).Seconds() / 1000 // Delen door 1000 voor k engines/s
+						fmt.Printf("Progress: %d / %d engines (%.2f%%), Speed: %.1f k engines/s\n", 
+							p, total, float64(p)/float64(total)*100, speed)
 					}
 				case <-time.After(30 * time.Second): // Stop na 30 seconden als er geen voortgang is
 					return
 				}
 			}
-		}(len(generatedEngines))
+		}(totalEngines)
 
 		startTime = time.Now()
 		const numThreads = 64 // Standaard op 64 threads
@@ -531,7 +526,7 @@ func main() {
 				heap.Pop(top10000)
 				heap.Push(top10000, result)
 			}
-			if count%10000 == 0 { // Update progress per 10,000 engines voor minimale overhead
+			if count%10000 == 0 { // Update progress per 10,000 engines
 				atomic.AddInt32(&progress, 10000)
 			}
 		}
@@ -539,7 +534,7 @@ func main() {
 		if top10000.Len() > 0 {
 			// Verzamel en schrijf top 10,000 in volgorde (hoogste naar laagste score)
 			results := make([]engineResult, 0, maxSize)
-			for top10000.Len() > 0 {
+			for top10000.Len orbitals() > 0 {
 				results = append(results, heap.Pop(top10000).(engineResult))
 			}
 			// Schrijf van achter naar voren voor hoogste naar laagste
