@@ -534,7 +534,7 @@ func main() {
 		if top10000.Len() > 0 {
 			// Verzamel en schrijf top 10,000 in volgorde (hoogste naar laagste score)
 			results := make([]engineResult, 0, maxSize)
-			for top10000.Len orbitals() > 0 {
+			for top10000.Len() > 0 {
 				results = append(results, heap.Pop(top10000).(engineResult))
 			}
 			// Schrijf van achter naar voren voor hoogste naar laagste
