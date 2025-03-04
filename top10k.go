@@ -386,13 +386,18 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
 	}
 }
 
-// parseEngineCode haalt de engine code uit een invoer met prefix
+// parseEngineCode haalt de engine code uit een invoer met prefix en kapt af na 12 cijfers voor depth engines
 func parseEngineCode(input string) string {
 	parts := strings.Split(input, ":")
+	engine := strings.TrimSpace(input)
 	if len(parts) > 2 {
-		return strings.TrimSpace(parts[2])
+		engine = strings.TrimSpace(parts[2])
 	}
-	return strings.TrimSpace(input)
+	// Als het een depth engine is (alleen cijfers), kap af na 12 cijfers
+	if len(engine) > 12 && strings.ContainsAny(engine, "12345") && !strings.ContainsAny(engine, "WVALD") {
+		return engine[:12]
+	}
+	return engine
 }
 
 func main() {
@@ -481,7 +486,7 @@ func main() {
 		}(len(generatedEngines))
 
 		startTime = time.Now()
-		const numThreads = 32 // Standaard op 16 threads
+		const numThreads = 64 // Standaard op 64 threads
 		enginesPerThread := (len(generatedEngines) + numThreads - 1) / numThreads // Gelijkmatige verdeling
 
 		for i := 0; i < numThreads; i++ {
