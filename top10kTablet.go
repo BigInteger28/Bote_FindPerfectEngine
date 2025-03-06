@@ -483,7 +483,7 @@ func main() {
 			close(top10000Chan)
 		}()
 
-		file, err := os.Create("top_10000_engines.txt")
+		file, err := os.Create("storage/shared/Documents/top_10000_engines.txt")
 		if err != nil {
 			fmt.Printf("Fout bij het openen van bestand: %v\n", err)
 			return
