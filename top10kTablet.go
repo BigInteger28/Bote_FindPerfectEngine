@@ -357,6 +357,7 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
 		}
 
 		// Update voortgang na elke engine
+		var mu sync.Mutex
 		atomic.AddInt64(progressComparisons, int64(len(inputEngines)))
 		p := atomic.LoadInt64(progressComparisons)
 		if p%updateInterval == 0 {
@@ -369,6 +370,7 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
 				fmt.Printf("Voortgang: %d / %d matches (%.2f%%)\n",
 					p, totalComparisons, float64(p)/float64(totalComparisons)*100)
 			}
+			mu.Lock()
 		}
 	}
 
