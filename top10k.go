@@ -73,7 +73,7 @@ func (h *minHeap) Pop() interface{} {
 // Globale variabelen voor voortgang
 var progressComparisons int64
 var totalComparisons int64
-var updateInterval int64 = 100000 // Update na elke 100.000 matches, aanpasbaar
+var updateInterval int64 = 20000000 // Update na elke 20.000.000 matches, aanpasbaar
 var startTime time.Time
 
 // **getElementFromCode** haalt direct een element op basis van de engine code voor de eerste zet
@@ -434,10 +434,10 @@ func main() {
 		var memoryInput string
 		fmt.Scanln(&memoryInput)
 		if memoryInput == "" {
-			maxMemoryMB = 128000
+			maxMemoryMB = 64000
 		} else if n, err := fmt.Sscanf(memoryInput, "%d", &maxMemoryMB); err != nil || n != 1 || maxMemoryMB < 1 || maxMemoryMB > 512000 {
-			maxMemoryMB = 128000
-			fmt.Println("Ongeldige invoer, defaulting naar 128.000 MB.")
+			maxMemoryMB = 64000
+			fmt.Println("Ongeldige invoer, defaulting naar 64.000 MB.")
 		}
 
 		generatedEngines := generateEngines(startDepth)
@@ -460,8 +460,8 @@ func main() {
 		progressComparisons = 0
 		startTime = time.Now()
 
-		// Stel het aantal threads in op 4, geschikt voor de meeste tablets
-		numThreads := 4
+		// Stel het aantal threads in op 16, geschikt voor de meeste pc
+		numThreads := 16
 		enginesPerThread := (totalEngines + numThreads - 1) / numThreads
 
 		for i := 0; i < numThreads; i++ {
