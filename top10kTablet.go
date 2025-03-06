@@ -322,61 +322,63 @@ func simulateDepthGameToMoves(engine string, opponent string) (moves [13]byte) {
 
 // **evaluateBatch** evalueert een batch van engines en berekent de totale score (p1Score - p2Score)
 func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- engineResult, progressComparisons *int64) {
-	h := &minHeap{}
-	heap.Init(h)
-	maxSize := 10000
+    h := &minHeap{}
+    heap.Init(h)
+    maxSize := 10000
 
-	for _, engine := range engines {
-		totalScore := 0
-		for _, inputEngine := range inputEngines {
-			var p1Score, p2Score int
-			if len(inputEngine) == 13 {
-				if len(engine) == 12 {
-					p1Moves := simulateDepthGameToMoves(engine, inputEngine)
-					p1Score, p2Score = simulateFixedGame(string(p1Moves[:]), inputEngine)
-				} else {
-					p1Score, p2Score = simulateFixedGame(engine, inputEngine)
-				}
-			} else {
-				p1Score, p2Score = simulateDepthGame(engine, inputEngine)
-			}
-			if p1Score == -1 || p2Score == -1 {
-				continue
-			}
-			totalScore += p1Score - p2Score
-		}
+    var printMu sync.Mutex // Mutex om overlappende prints te voorkomen
 
-		if totalScore != 0 {
-			result := engineResult{engine: engine, score: totalScore}
-			if h.Len() < maxSize {
-				heap.Push(h, result)
-			} else if totalScore > (*h)[0].score {
-				heap.Pop(h)
-				heap.Push(h, result)
-			}
-		}
+    for _, engine := range engines {
+        totalScore := 0
+        for _, inputEngine := range inputEngines {
+            var p1Score, p2Score int
+            if len(inputEngine) == 13 {
+                if len(engine) == 12 {
+                    p1Moves := simulateDepthGameToMoves(engine, inputEngine)
+                    p1Score, p2Score = simulateFixedGame(string(p1Moves[:]), inputEngine)
+                } else {
+                    p1Score, p2Score = simulateFixedGame(engine, inputEngine)
+                }
+            } else {
+                p1Score, p2Score = simulateDepthGame(engine, inputEngine)
+            }
+            if p1Score == -1 || p2Score == -1 {
+                continue
+            }
+            totalScore += p1Score - p2Score
 
-		// Update voortgang na elke engine
-		var mu sync.Mutex
-		atomic.AddInt64(progressComparisons, int64(len(inputEngines)))
-		p := atomic.LoadInt64(progressComparisons)
-		if p%updateInterval == 0 {
-			elapsed := time.Since(startTime).Seconds()
-			if elapsed > 0 {
-				speed := float64(p) / elapsed / 1000 // k matches/s
-				fmt.Printf("Voortgang: %d / %d matches (%.2f%%), Snelheid: %.1f k matches/s\n",
-					p, totalComparisons, float64(p)/float64(totalComparisons)*100, speed)
-			} else {
-				fmt.Printf("Voortgang: %d / %d matches (%.2f%%)\n",
-					p, totalComparisons, float64(p)/float64(totalComparisons)*100)
-			}
-			mu.Lock()
-		}
-	}
+            // Update voortgang na elke match
+            atomic.AddInt64(progressComparisons, 1)
+            p := atomic.LoadInt64(progressComparisons)
+            if p % updateInterval == 0 {
+                printMu.Lock()
+                elapsed := time.Since(startTime).Seconds()
+                if elapsed > 0 {
+                    speed := float64(p) / elapsed / 1000 // k matches/s
+                    fmt.Printf("Voortgang: %d / %d matches (%.2f%%), Snelheid: %.1f k matches/s\n",
+                        p, totalComparisons, float64(p)/float64(totalComparisons)*100, speed)
+                } else {
+                    fmt.Printf("Voortgang: %d / %d matches (%.2f%%)\n",
+                        p, totalComparisons, float64(p)/float64(totalComparisons)*100)
+                }
+                printMu.Unlock()
+            }
+        }
 
-	for h.Len() > 0 {
-		top10000Chan <- heap.Pop(h).(engineResult)
-	}
+        if totalScore != 0 {
+            result := engineResult{engine: engine, score: totalScore}
+            if h.Len() < maxSize {
+                heap.Push(h, result)
+            } else if totalScore > (*h)[0].score {
+                heap.Pop(h)
+                heap.Push(h, result)
+            }
+        }
+    }
+
+    for h.Len() > 0 {
+        top10000Chan <- heap.Pop(h).(engineResult)
+    }
 }
 
 // **parseEngineCode** haalt de engine code uit een invoer met prefix en kapt af na 12 cijfers voor depth engines
