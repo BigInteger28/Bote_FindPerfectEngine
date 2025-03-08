@@ -320,7 +320,7 @@ func simulateDepthGameToMoves(engine string, opponent string) (moves [13]byte) {
 	return moves
 }
 
-// **evaluateBatch** evalueert een batch van engines en berekent de totale score (p1Score - p2Score)
+// **evaluateBatch** evalueert een batch van engines en berekent de totale score met bonus/malus
 func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- engineResult, progressComparisons *int64) {
     h := &minHeap{}
     heap.Init(h)
@@ -345,7 +345,16 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
             if p1Score == -1 || p2Score == -1 {
                 continue
             }
-            totalScore += p1Score - p2Score
+
+            // Nieuwe scoreberekening
+            diff := p1Score - p2Score
+            if p1Score > p2Score {
+                totalScore += diff + 10 // Winst: +10 bonus
+            } else if p1Score < p2Score {
+                totalScore += diff - 10 // Verlies: -10 malus
+            } else {
+                totalScore += p1Score   // Gelijkspel: +p1Score
+            }
 
             // Update voortgang na elke match
             atomic.AddInt64(progressComparisons, 1)
