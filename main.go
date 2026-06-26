@@ -2,17 +2,17 @@ package main
 
 import (
 	"bufio"
+	"container/heap"
 	"fmt"
 	"os"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// elementsDepth definieert de transformaties van elementen op verschillende dieptes
+// **elementsDepth** definieert de transformaties van elementen op verschillende dieptes
 var elementsDepth = map[byte]map[int]byte{
 	'W': {1: 'L', 2: 'A', 3: 'V', 4: 'W'},
 	'V': {1: 'W', 2: 'L', 3: 'A', 4: 'V'},
@@ -20,7 +20,7 @@ var elementsDepth = map[byte]map[int]byte{
 	'L': {1: 'A', 2: 'V', 3: 'W', 4: 'L'},
 }
 
-// moveWins definieert bitwise wie wint (1 = move1 wint, 2 = move2 wint, 0 = gelijk)
+// **moveWins** definieert bitwise wie wint (1 = move1 wint, 2 = move2 wint, 0 = gelijk)
 var moveWins = [5][5]uint8{
 	{0, 1, 0, 2, 0}, // W vs W,V,A,L,D
 	{2, 0, 1, 0, 0}, // V
@@ -29,7 +29,7 @@ var moveWins = [5][5]uint8{
 	{0, 0, 0, 0, 0}, // D
 }
 
-// moveToIndex converteert een move naar een index
+// **moveToIndex** converteert een move naar een index
 var moveToIndex = map[byte]int{
 	'W': 0,
 	'V': 1,
@@ -38,35 +38,54 @@ var moveToIndex = map[byte]int{
 	'D': 4,
 }
 
-// depthToElement converteert een diepte naar een element (alleen dieptes 1-5)
+// **depthToElement** converteert een diepte naar een element (alleen dieptes 1-5)
 var depthToElement = [5]byte{'W', 'V', 'A', 'L', 'D'}
 
-// Player houdt de staat van een speler bij
+// **Player** houdt de staat van een speler bij
 type Player struct {
-	engineCode string
-	available  [5]int // W, V, A, L, D
-	moves      [13]byte
-	moveCount  int
+	available [5]int // W, V, A, L, D
+	moves     [13]byte
+	moveCount int
 }
 
-// engineResult houdt een engine en zijn totaalscore bij
+// **engineResult** houdt een engine en zijn totaalscore bij
 type engineResult struct {
 	engine string
 	score  int
 }
 
-// getElementFromCode haalt direct een element op basis van de engine code voor de eerste zet
-func getElementFromCode(depth int) byte {
-	if depth < 1 || depth > 5 {
-		return 0 // Ongeldige diepte, retourneer 0 (ongeldige move)
-	}
-	if depth == 5 {
-		return 'D' // Speciaal geval voor diepte 5
-	}
-	return depthToElement[depth-1] // Offset met 1 omdat depthToElement nu 1-4 is voor 'W', 'V', 'A', 'L'
+// **minHeap** implementeert heap.Interface voor de top 10.000 engines (hoogste scores eerst)
+type minHeap []engineResult
+
+func (h minHeap) Len() int           { return len(h) }
+func (h minHeap) Less(i, j int) bool { return h[i].score < h[j].score } // Min-heap, laagste score eerst
+func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *minHeap) Push(x interface{}) {
+	*h = append(*h, x.(engineResult))
+}
+func (h *minHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
 }
 
-// getElementByDepth berekent het volgende element gebaseerd op vorig element en diepte
+// Globale variabelen voor voortgang
+var progressComparisons int64
+var totalComparisons int64
+var updateInterval int64 = 10000000 // Update na elke 10.000.000 matches, aanpasbaar
+var startTime time.Time
+
+// **getElementFromCode** haalt direct een element op basis van de engine code voor de eerste zet
+func getElementFromCode(depth int) byte {
+	if depth < 1 || depth > 5 {
+		return 0
+	}
+	return depthToElement[depth-1]
+}
+
+// **getElementByDepth** berekent het volgende element gebaseerd op vorig element en diepte
 func getElementByDepth(prevElement byte, depth int) byte {
 	if depth == 5 {
 		return 'D'
@@ -77,10 +96,14 @@ func getElementByDepth(prevElement byte, depth int) byte {
 	if prevElement == 'D' {
 		prevElement = 'L'
 	}
-	return elementsDepth[prevElement][depth]
+	next, ok := elementsDepth[prevElement][depth]
+	if !ok {
+		return 0
+	}
+	return next
 }
 
-// chooseAvailableElement kiest een beschikbaar element of alternatief met diepte 1 fallback
+// **chooseAvailableElement** kiest een beschikbaar element of alternatief met diepte 1 fallback
 func chooseAvailableElement(target byte, available *[5]int) byte {
 	targetIdx := moveToIndex[target]
 	if available[targetIdx] > 0 {
@@ -100,7 +123,7 @@ func chooseAvailableElement(target byte, available *[5]int) byte {
 	return 0
 }
 
-// getLastElement bepaalt het resterende element voor de 13e zet
+// **getLastElement** bepaalt het resterende element voor de 13e zet
 func getLastElement(available *[5]int) byte {
 	candidates := [5]byte{'W', 'V', 'A', 'L', 'D'}
 	for _, c := range candidates {
@@ -111,52 +134,79 @@ func getLastElement(available *[5]int) byte {
 	return 0
 }
 
-// determineWinner bepaalt de winnaar met bitwise operaties
+// **determineWinner** bepaalt de winnaar met bitwise operaties
 func determineWinner(move1, move2 byte) int {
-	return int(moveWins[moveToIndex[move1]][moveToIndex[move2]])
+	move1Idx, ok1 := moveToIndex[move1]
+	move2Idx, ok2 := moveToIndex[move2]
+	if !ok1 || !ok2 {
+		return 0 // Ongeldige moves, geen winnaar
+	}
+	return int(moveWins[move1Idx][move2Idx])
 }
 
-// simulateDepthGame simuleert een spel met diepte-gebaseerde codes
-func simulateDepthGame(engine1, engine2 string) (result int, p1Score, p2Score int) {
+// **simulateDepthGame** simuleert een spel met diepte-gebaseerde codes
+func simulateDepthGame(engine1, engine2 string) (p1Score, p2Score int) {
 	if len(engine1) != 12 || len(engine2) != 12 {
-		return -1, 0, 0
+		return -1, -1
 	}
 
 	var p1, p2 Player
 	p1.available = [5]int{3, 3, 3, 3, 1}
 	p2.available = [5]int{3, 3, 3, 3, 1}
-	p1.engineCode, p2.engineCode = engine1, engine2
-
-	p1Score, p2Score = 0, 0
 
 	for i := 0; i < 12; i++ {
-		depth1, depth2 := int(engine1[i]-'0'), int(engine2[i]-'0')
+		depth1 := int(engine1[i] - '0')
+		depth2 := int(engine2[i] - '0')
 
-		var move1, move2 byte
-		if i == 0 {
-			move1 = chooseAvailableElement(getElementFromCode(depth1), &p1.available)
-			move2 = chooseAvailableElement(getElementFromCode(depth2), &p2.available)
+		var target1, target2 byte
+		if depth1 >= 6 {
+			base1 := depth1 - 5
+			if i < 2 {
+				target1 = getElementFromCode(base1)
+			} else {
+				target1 = getElementByDepth(p2.moves[i-2], base1)
+			}
+		} else if i == 0 {
+			target1 = getElementFromCode(depth1)
 		} else {
-			move1 = chooseAvailableElement(getElementByDepth(p2.moves[i-1], depth1), &p1.available)
-			move2 = chooseAvailableElement(getElementByDepth(p1.moves[i-1], depth2), &p2.available)
+			target1 = getElementByDepth(p2.moves[i-1], depth1)
+		}
+		if depth2 >= 6 {
+			base2 := depth2 - 5
+			if i < 2 {
+				target2 = getElementFromCode(base2)
+			} else {
+				target2 = getElementByDepth(p1.moves[i-2], base2)
+			}
+		} else if i == 0 {
+			target2 = getElementFromCode(depth2)
+		} else {
+			target2 = getElementByDepth(p1.moves[i-1], depth2)
+		}
+		move1 := chooseAvailableElement(target1, &p1.available)
+		move2 := chooseAvailableElement(target2, &p2.available)
+
+		if move1 == 0 || move2 == 0 {
+			return -1, -1
 		}
 
-		if move1 != 0 {
-			p1.available[moveToIndex[move1]]--
-			p1.moves[p1.moveCount] = move1
-			p1.moveCount++
-		}
-		if move2 != 0 {
-			p2.available[moveToIndex[move2]]--
-			p2.moves[p2.moveCount] = move2
-			p2.moveCount++
-		}
+		p1.available[moveToIndex[move1]]--
+		p1.moves[p1.moveCount] = move1
+		p1.moveCount++
+		p2.available[moveToIndex[move2]]--
+		p2.moves[p2.moveCount] = move2
+		p2.moveCount++
 
 		winner := determineWinner(move1, move2)
 		if winner == 1 {
 			p1Score++
 		} else if winner == 2 {
 			p2Score++
+		}
+
+		// Early termination: als p1 niet meer kan winnen of gelijkspelen
+		if p2Score-p1Score > 12-i {
+			return p1Score, p2Score
 		}
 	}
 
@@ -177,27 +227,24 @@ func simulateDepthGame(engine1, engine2 string) (result int, p1Score, p2Score in
 	if winner == 1 {
 		p1Score++
 	} else if winner == 2 {
-		p2Score++
-	}
+			p2Score++
+		}
 
-	if p1Score > p2Score {
-		return 1, p1Score, p2Score
-	} else if p2Score > p1Score {
-		return 2, p1Score, p2Score
-	}
-	return 0, p1Score, p2Score
+	return p1Score, p2Score
 }
 
-// simulateFixedGame simuleert een spel met vaste zetten
-func simulateFixedGame(engine1, engine2 string) (result int, p1Score, p2Score int) {
+// **simulateFixedGame** simuleert een spel met vaste zetten
+func simulateFixedGame(engine1, engine2 string) (p1Score, p2Score int) {
 	if len(engine1) != 13 || len(engine2) != 13 {
-		return -1, 0, 0
+		return -1, -1
 	}
-
-	p1Score, p2Score = 0, 0
 
 	for i := 0; i < 13; i++ {
 		move1, move2 := engine1[i], engine2[i]
+		validMoves := map[byte]bool{'W': true, 'V': true, 'A': true, 'L': true, 'D': true}
+		if !validMoves[move1] || !validMoves[move2] {
+			return -1, -1
+		}
 		winner := determineWinner(move1, move2)
 		if winner == 1 {
 			p1Score++
@@ -206,81 +253,84 @@ func simulateFixedGame(engine1, engine2 string) (result int, p1Score, p2Score in
 		}
 	}
 
-	if p1Score > p2Score {
-		return 1, p1Score, p2Score
-	} else if p2Score > p1Score {
-		return 2, p1Score, p2Score
-	}
-	return 0, p1Score, p2Score
+	return p1Score, p2Score
 }
 
-func generateWithLastDigit(prefix string, length int, hasUsedFive bool, engines *[]string) {
-    if length == 0 {
-        if len(prefix) == 12 {
-            *engines = append(*engines, prefix)
-        }
-        return
-    }
-    for digit := '5'; digit >= '1'; digit-- {
-        if digit == '5' && !hasUsedFive {
-            newPrefix := prefix + string(digit) // Voeg toe aan het einde
-            generateWithLastDigit(newPrefix, length-1, true, engines)
-        } else if digit != '5' {
-            newPrefix := prefix + string(digit) // Voeg toe aan het einde
-            generateWithLastDigit(newPrefix, length-1, hasUsedFive, engines)
-        }
-    }
-}
-
+// **generateEngines** genereert alle engine codes met max 1 '5', alle dieptes 1-5
 func generateEngines(startDepth string) []string {
-    var engines []string
-    remainingLength := 12 - len(startDepth)
-    hasFive := strings.Contains(startDepth, "5")
+	var engines []string
+	remainingLength := 12 - len(startDepth)
+	hasFive := strings.Contains(startDepth, "5")
 
-    if remainingLength < 0 {
-        return engines
-    }
+	if remainingLength < 0 {
+		return engines
+	}
 
-    if startDepth != "" {
-        for _, digit := range startDepth {
-            if digit < '1' || digit > '5' {
-                return engines
-            }
-        }
-        if len(startDepth) > 12 {
-            return engines
-        }
-        generateWithLastDigit(startDepth, remainingLength, hasFive, &engines)
-    } else {
-        for firstDigit := '5'; firstDigit >= '1'; firstDigit-- {
-            prefix := string(firstDigit)
-            hasFiveLocal := firstDigit == '5'
-            generateWithLastDigit(prefix, 11, hasFiveLocal, &engines)
-        }
-    }
+	if startDepth != "" {
+		for i, digit := range startDepth {
+			if digit < '1' || digit > '9' {
+				return engines
+			}
+			if i == 0 && digit > '5' {
+				return engines // eerste positie mag alleen 1-5 zijn
+			}
+		}
+		generateRemaining(startDepth, remainingLength, hasFive, &engines)
+	} else {
+		for firstDigit := '1'; firstDigit <= '5'; firstDigit++ { // eerste positie: enkel 1-5
+			prefix := string(firstDigit)
+			hasFiveLocal := firstDigit == '5'
+			generateRemaining(prefix, 11, hasFiveLocal, &engines)
+		}
+	}
 
-    return engines
+	return engines
 }
 
-// simulateDepthGameToMoves genereert de zetten van een diepte-gebaseerde engine, reactief op de tegenstander
+// **generateRemaining** genereert de resterende posities iteratief
+func generateRemaining(prefix string, remainingLength int, hasUsedFive bool, engines *[]string) {
+	if remainingLength == 0 {
+		if len(prefix) == 12 {
+			*engines = append(*engines, prefix)
+		}
+		return
+	}
+
+	for digit := '1'; digit <= '9'; digit++ {
+		if digit == '5' && hasUsedFive {
+			continue
+		}
+		newPrefix := prefix + string(digit)
+		generateRemaining(newPrefix, remainingLength-1, hasUsedFive || digit == '5', engines)
+	}
+}
+
+// **simulateDepthGameToMoves** genereert de zetten van een diepte-gebaseerde engine, reactief op de tegenstander
 func simulateDepthGameToMoves(engine string, opponent string) (moves [13]byte) {
 	if len(engine) != 12 || len(opponent) != 13 {
 		return
 	}
 
 	p := Player{
-		engineCode: engine,
-		available:  [5]int{3, 3, 3, 3, 1},
+		available: [5]int{3, 3, 3, 3, 1},
 	}
 
 	for i := 0; i < 12; i++ {
 		depth := int(engine[i] - '0')
-		var move byte
-		if i == 0 {
-			move = chooseAvailableElement(getElementFromCode(depth), &p.available)
+		var target byte
+		if depth >= 6 {
+			base := depth - 5
+			if i < 2 {
+				target = getElementFromCode(base)
+			} else {
+				target = getElementByDepth(opponent[i-2], base)
+			}
+		} else if i == 0 {
+			target = getElementFromCode(depth)
 		} else {
-			move = chooseAvailableElement(getElementByDepth(opponent[i-1], depth), &p.available)
+			target = getElementByDepth(opponent[i-1], depth)
 		}
+		move := chooseAvailableElement(target, &p.available)
 		if move != 0 {
 			p.available[moveToIndex[move]]--
 			moves[p.moveCount] = move
@@ -306,95 +356,87 @@ func simulateDepthGameToMoves(engine string, opponent string) (moves [13]byte) {
 	return moves
 }
 
-// evaluateBatch evalueert een batch van engines met een expectedResult
-func evaluateBatch(engines []string, inputEngines []string, expectedResult string, resultChan chan<- engineResult, progress *int32) {
-	for _, engine := range engines {
-		matches := 0
-		totalScore := 0
+// **evaluateBatch** evalueert een batch van engines en berekent de totale score met bonus/malus
+func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- engineResult, progressComparisons *int64) {
+    h := &minHeap{}
+    heap.Init(h)
+    maxSize := 10000
 
-		for _, inputEngine := range inputEngines {
-			var result, p1Score, p2Score int
-			if len(inputEngine) == 13 {
-				if len(engine) == 12 {
-					p1Moves := simulateDepthGameToMoves(engine, inputEngine)
-					result, p1Score, p2Score = simulateFixedGame(string(p1Moves[:]), inputEngine)
-				} else {
-					result, p1Score, p2Score = simulateFixedGame(engine, inputEngine)
-				}
-			} else {
-				result, p1Score, p2Score = simulateDepthGame(engine, inputEngine)
-			}
-			if result == -1 {
-				continue // Skip invalid engines, but don't return early
-			}
-			if expectedResult == "Win" {
-				if result == 1 {
-					matches++
-					totalScore += p1Score - p2Score
-				}
-			} else if expectedResult == "Draw" {
-				if result == 0 {
-					matches++
-					totalScore += p1Score
-				}
-			} else if expectedResult == "Lose" {
-				if result == 2 {
-					matches++
-					totalScore += p2Score - p1Score
-				}
-			}
-		}
+    var printMu sync.Mutex // Mutex om overlappende prints te voorkomen
 
-		if matches == len(inputEngines) {
-			resultChan <- engineResult{engine: engine, score: totalScore}
-		}
-	}
-	atomic.AddInt32(progress, int32(len(engines)))
+    for _, engine := range engines {
+        totalScore := 0
+        for _, inputEngine := range inputEngines {
+            var p1Score, p2Score int
+            if len(inputEngine) == 13 {
+                if len(engine) == 12 {
+                    p1Moves := simulateDepthGameToMoves(engine, inputEngine)
+                    p1Score, p2Score = simulateFixedGame(string(p1Moves[:]), inputEngine)
+                } else {
+                    p1Score, p2Score = simulateFixedGame(engine, inputEngine)
+                }
+            } else {
+                p1Score, p2Score = simulateDepthGame(engine, inputEngine)
+            }
+            if p1Score == -1 || p2Score == -1 {
+                continue
+            }
+
+            // Nieuwe scoreberekening
+            diff := p1Score - p2Score
+            if p1Score > p2Score {
+                totalScore += diff + 10 // Winst: +10 bonus
+            } else if p1Score < p2Score {
+                totalScore += diff - 10 // Verlies: -10 malus
+            } else {
+                totalScore += p1Score   // Gelijkspel: +p1Score
+            }
+
+            // Update voortgang na elke match
+            atomic.AddInt64(progressComparisons, 1)
+            p := atomic.LoadInt64(progressComparisons)
+            if p % updateInterval == 0 {
+                printMu.Lock()
+                elapsed := time.Since(startTime).Seconds()
+                if elapsed > 0 {
+                    speed := float64(p) / elapsed / 1000 // k matches/s
+                    fmt.Printf("Voortgang: %d / %d matches (%.2f%%), Snelheid: %.1f k matches/s\n",
+                        p, totalComparisons, float64(p)/float64(totalComparisons)*100, speed)
+                } else {
+                    fmt.Printf("Voortgang: %d / %d matches (%.2f%%)\n",
+                        p, totalComparisons, float64(p)/float64(totalComparisons)*100)
+                }
+                printMu.Unlock()
+            }
+        }
+
+        if totalScore != 0 {
+            result := engineResult{engine: engine, score: totalScore}
+            if h.Len() < maxSize {
+                heap.Push(h, result)
+            } else if totalScore > (*h)[0].score {
+                heap.Pop(h)
+                heap.Push(h, result)
+            }
+        }
+    }
+
+    for h.Len() > 0 {
+        top10000Chan <- heap.Pop(h).(engineResult)
+    }
 }
 
-// evaluateBatchClose evalueert een batch van engines voor "nooit verliezen"
-func evaluateBatchClose(engines []string, inputEngines []string, resultChan chan<- engineResult, progress *int32) {
-	for _, engine := range engines {
-		neverLoses := true
-		totalScore := 0
-
-		for _, inputEngine := range inputEngines {
-			var result, p1Score, p2Score int
-			if len(inputEngine) == 13 {
-				if len(engine) == 12 {
-					p1Moves := simulateDepthGameToMoves(engine, inputEngine)
-					result, p1Score, p2Score = simulateFixedGame(string(p1Moves[:]), inputEngine)
-				} else {
-					result, p1Score, p2Score = simulateFixedGame(engine, inputEngine)
-				}
-			} else {
-				result, p1Score, p2Score = simulateDepthGame(engine, inputEngine)
-			}
-			if result == -1 || result == 2 { // Verlies of ongeldig
-				neverLoses = false
-				break
-			}
-			if result == 1 {
-				totalScore += p1Score - p2Score
-			} else { // Draw (result == 0)
-				totalScore += p1Score
-			}
-		}
-
-		if neverLoses {
-			resultChan <- engineResult{engine: engine, score: totalScore}
-		}
-	}
-	atomic.AddInt32(progress, int32(len(engines)))
-}
-
-// parseEngineCode haalt de engine code uit een invoer met prefix
+// **parseEngineCode** haalt de engine code uit een invoer met prefix en kapt af na 12 cijfers voor depth engines
 func parseEngineCode(input string) string {
 	parts := strings.Split(input, ":")
+	engine := strings.TrimSpace(input)
 	if len(parts) > 2 {
-		return strings.TrimSpace(parts[2])
+		engine = strings.TrimSpace(parts[2])
 	}
-	return strings.TrimSpace(input)
+	if len(engine) > 12 && strings.ContainsAny(engine, "123456789") && !strings.ContainsAny(engine, "WVALD") {
+		return engine[:12]
+	}
+	return engine
 }
 
 func main() {
@@ -408,12 +450,12 @@ func main() {
 				break
 			}
 			engine := parseEngineCode(input)
-			validDepth := len(engine) == 12 && !strings.ContainsAny(engine, "67890") && strings.ContainsAny(engine, "12345")
+			validDepth := len(engine) == 12 && !strings.ContainsAny(engine, "0") && strings.ContainsAny(engine, "123456789")
 			validFixed := len(engine) == 13 && strings.ContainsAny(engine, "WVALD") && !strings.ContainsAny(engine, "1234567890")
 			if validDepth || validFixed {
 				inputEngines = append(inputEngines, engine)
 			} else {
-				fmt.Printf("Ongeldige engine code '%s'. Moet 12 chiffres (1-5) of 13 tekens (W, V, A, L, D) zijn.\n", engine)
+				fmt.Printf("Ongeldige engine code '%s'. Moet 12 chiffres (1-9) of 13 tekens (W, V, A, L, D) zijn.\n", engine)
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -426,229 +468,114 @@ func main() {
 			break
 		}
 
-		var startDepth, expectedResult string
-		var maxWorkers, maxMemoryMB int
+		var startDepth string
+		var maxMemoryMB int
 
 		fmt.Println("Voer de startdepth in (leeg voor alle combinaties, bijv. '51'): ")
 		fmt.Scanln(&startDepth)
 
-		fmt.Println("Voer het verwachte resultaat in (Win/Draw/Lose): ")
-		fmt.Scanln(&expectedResult)
-
-		if len(startDepth) > 12 || (startDepth != "" && strings.ContainsAny(startDepth, "67890")) {
-			fmt.Println("Ongeldige startdepth. Moet <= 12 chiffres zijn, alleen 1-5 of leeg.")
-			continue
-		}
-		if expectedResult != "Win" && expectedResult != "Draw" && expectedResult != "Lose" {
-			fmt.Println("Ongeldig resultaat. Gebruik 'Win', 'Draw' of 'Lose'.")
+		if len(startDepth) > 12 || (startDepth != "" && strings.ContainsAny(startDepth, "0")) {
+			fmt.Println("Ongeldige startdepth. Moet <= 12 chiffres zijn, eerste positie 1-5, rest 1-9.")
 			continue
 		}
 
-		// Standaard 2x CPU-cores als aantal threads
-		defaultWorkers := runtime.NumCPU() * 2
-		fmt.Printf("Gebruik automatisch %d threads (2x aantal CPU-cores)? (ja/nee): ", defaultWorkers)
-		var autoThreads string
-		fmt.Scanln(&autoThreads)
-		if strings.ToLower(autoThreads) == "ja" {
-			maxWorkers = defaultWorkers
-		} else {
-			fmt.Println("Voer het aantal threads in (1-1000): ")
-			var workersInput string
-			fmt.Scanln(&workersInput)
-			if n, err := fmt.Sscanf(workersInput, "%d", &maxWorkers); err != nil || n != 1 || maxWorkers < 1 || maxWorkers > 1000 {
-				maxWorkers = defaultWorkers
-				fmt.Printf("Ongeldige invoer, defaulting naar %d threads (2x aantal CPU-cores).\n", maxWorkers)
-			}
-		}
-
-		fmt.Println("Voer het maximale geheugen in MB in (1-128000, default 100): ")
+		fmt.Println("Voer het maximale geheugen in MB in (1-512000, default 128000): ")
 		var memoryInput string
 		fmt.Scanln(&memoryInput)
-		if n, err := fmt.Sscanf(memoryInput, "%d", &maxMemoryMB); err != nil || n != 1 || maxMemoryMB < 1 || maxMemoryMB > 128000 {
-			maxMemoryMB = 100
-			fmt.Println("Ongeldige invoer, defaulting naar 100 MB.")
+		if memoryInput == "" {
+			maxMemoryMB = 64000
+		} else if n, err := fmt.Sscanf(memoryInput, "%d", &maxMemoryMB); err != nil || n != 1 || maxMemoryMB < 1 || maxMemoryMB > 512000 {
+			maxMemoryMB = 64000
+			fmt.Println("Ongeldige invoer, defaulting naar 64.000 MB.")
 		}
 
 		generatedEngines := generateEngines(startDepth)
 
 		const bytesPerResult = 24
-		maxBufferSize := (maxMemoryMB * 1024 * 1024) / bytesPerResult // Bijv. 128,000 MB → ~5,368,709,120
+		maxBufferSize := (maxMemoryMB * 1024 * 1024) / bytesPerResult
 		if maxBufferSize > len(generatedEngines) {
 			maxBufferSize = len(generatedEngines)
 		}
-		if maxBufferSize < 10000 { // Verhoog minimum naar 10,000 voor grotere batches
+		if maxBufferSize < 10000 {
 			maxBufferSize = 10000
 		}
 
-		// Pre-allocate matching results
-		matchingEngines := make([]engineResult, 0, 67108864) // Groter pre-alloceren voor alle mogelijke engines (max 1 '5')
-		resultChan := make(chan engineResult, maxBufferSize)
+		totalEngines := len(generatedEngines)
+		numInputEngines := len(inputEngines)
+		totalComparisons = int64(totalEngines) * int64(numInputEngines)
 
-		// Eerste poging: zoek engines die alles winnen
+		top10000Chan := make(chan engineResult, 1000000)
 		var wg sync.WaitGroup
-		var progress int32
-		doneFirst := make(chan struct{})
-
-		var startTime time.Time
-		go func(totalEngines int) {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case t := <-ticker.C:
-					p := atomic.LoadInt32(&progress)
-					if t.Sub(startTime) >= 10*time.Second {
-						speed := float64(p) / t.Sub(startTime).Seconds()
-						fmt.Printf("Progress: %d / %d engines (%.2f%%), Speed: %.0f engines/s\n", p, totalEngines, float64(p)/float64(totalEngines)*100, speed)
-					} else {
-						fmt.Printf("Progress: %d / %d engines (%.2f%%)\n", p, totalEngines, float64(p)/float64(totalEngines)*100)
-					}
-				case <-doneFirst:
-					p := atomic.LoadInt32(&progress)
-					speed := float64(p) / time.Since(startTime).Seconds()
-					fmt.Printf("Progress: %d / %d engines (%.2f%%), Speed: %.0f engines/s\n", p, totalEngines, float64(p)/float64(totalEngines)*100, speed)
-					return
-				}
-			}
-		}(len(generatedEngines))
-
+		progressComparisons = 0
 		startTime = time.Now()
-		batchSize := 1000
-		for i := 0; i < len(generatedEngines); i += batchSize {
-			end := i + batchSize
-			if end > len(generatedEngines) {
-				end = len(generatedEngines)
-			}
-			batch := generatedEngines[i:end]
 
+		defaultThreads := runtime.NumCPU()
+		fmt.Printf("Voer het aantal threads in (default %d): ", defaultThreads)
+		var threadsInput string
+		fmt.Scanln(&threadsInput)
+		numThreads := defaultThreads
+		if threadsInput != "" {
+			if n, err := fmt.Sscanf(threadsInput, "%d", &numThreads); err != nil || n != 1 || numThreads < 1 {
+				numThreads = defaultThreads
+				fmt.Printf("Ongeldige invoer, defaulting naar %d threads.\n", defaultThreads)
+			}
+		}
+		enginesPerThread := (totalEngines + numThreads - 1) / numThreads
+
+		for i := 0; i < numThreads; i++ {
+			start := i * enginesPerThread
+			end := start + enginesPerThread
+			if end > totalEngines {
+				end = totalEngines
+			}
 			wg.Add(1)
-			go func(engines []string) {
+			go func(threadStart, threadEnd int) {
 				defer wg.Done()
-				evaluateBatch(engines, inputEngines, expectedResult, resultChan, &progress)
-			}(batch)
+				batch := generatedEngines[threadStart:threadEnd]
+				evaluateBatch(batch, inputEngines, top10000Chan, &progressComparisons)
+			}(start, end)
 		}
 
 		go func() {
 			wg.Wait()
-			close(resultChan)
+			close(top10000Chan)
 		}()
 
-		for result := range resultChan {
-			matchingEngines = append(matchingEngines, result)
+		file, err := os.Create("top_10000_engines.txt")
+		if err != nil {
+			fmt.Printf("Fout bij het openen van bestand: %v\n", err)
+			return
 		}
-		close(doneFirst)
+		defer file.Close()
 
-		if len(matchingEngines) > 0 {
-			file, err := os.OpenFile("matching_engines.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				fmt.Printf("Fout bij het openen van bestand: %v\n", err)
-				continue
+		top10000 := &minHeap{}
+		heap.Init(top10000)
+		maxSize := 10000
+		for result := range top10000Chan {
+			if top10000.Len() < maxSize {
+				heap.Push(top10000, result)
+			} else if result.score > (*top10000)[0].score {
+				heap.Pop(top10000)
+				heap.Push(top10000, result)
 			}
-			defer file.Close()
+		}
 
-			sort.Slice(matchingEngines, func(i, j int) bool {
-				return matchingEngines[i].score > matchingEngines[j].score
-			})
-
-			for _, result := range matchingEngines {
+		if top10000.Len() > 0 {
+			results := make([]engineResult, 0, maxSize)
+			for top10000.Len() > 0 {
+				results = append(results, heap.Pop(top10000).(engineResult))
+			}
+			for i := len(results) - 1; i >= 0; i-- {
+				result := results[i]
 				_, err := file.WriteString(fmt.Sprintf("%s (score: %d)\n", result.engine, result.score))
 				if err != nil {
-					fmt.Printf("Fout bij het schrijven naar bestand: %v\n", err)
+					fmt.Printf("Fout bij het schrijven: %v\n", err)
 					break
 				}
 			}
-
-			fmt.Printf("We found %d engines / %d total generated engines who %s from all input engines\n",
-				len(matchingEngines), len(generatedEngines), strings.ToLower(expectedResult))
+			fmt.Printf("Top 10.000 engines opgeslagen uit %d matches.\n", totalComparisons)
 		} else {
-			fmt.Printf("No engines found that %s against all input engines. Do you want to search for the best engine that never loses (win or draw)? (y/.): ", strings.ToLower(expectedResult))
-			var response string
-			fmt.Scanln(&response)
-			if response == "y" {
-				// Reset progress for the second run
-				atomic.StoreInt32(&progress, 0)
-				// Pre-allocate for close results
-				matchingEnginesClose := make([]engineResult, 0, 67108864)
-				resultChanClose := make(chan engineResult, maxBufferSize)
-
-				var wgClose sync.WaitGroup
-				doneClose := make(chan struct{})
-
-				startTime = time.Now()
-				go func(totalEngines int) {
-					ticker := time.NewTicker(5 * time.Second)
-					defer ticker.Stop()
-					for {
-						select {
-						case t := <-ticker.C:
-							p := atomic.LoadInt32(&progress)
-							if t.Sub(startTime) >= 10*time.Second {
-								speed := float64(p) / t.Sub(startTime).Seconds()
-								fmt.Printf("Progress: %d / %d engines (%.2f%%), Speed: %.0f engines/s\n", p, totalEngines, float64(p)/float64(totalEngines)*100, speed)
-							} else {
-								fmt.Printf("Progress: %d / %d engines (%.2f%%)\n", p, totalEngines, float64(p)/float64(totalEngines)*100)
-							}
-						case <-doneClose:
-							p := atomic.LoadInt32(&progress)
-							speed := float64(p) / time.Since(startTime).Seconds()
-							fmt.Printf("Progress: %d / %d engines (%.2f%%), Speed: %.0f engines/s\n", p, totalEngines, float64(p)/float64(totalEngines)*100, speed)
-							return
-						}
-					}
-				}(len(generatedEngines))
-
-				for i := 0; i < len(generatedEngines); i += batchSize {
-					end := i + batchSize
-					if end > len(generatedEngines) {
-						end = len(generatedEngines)
-					}
-					batch := generatedEngines[i:end]
-
-					wgClose.Add(1)
-					go func(engines []string) {
-						defer wgClose.Done()
-						evaluateBatchClose(engines, inputEngines, resultChanClose, &progress)
-					}(batch)
-				}
-
-				go func() {
-					wgClose.Wait()
-					close(resultChanClose)
-				}()
-
-				for result := range resultChanClose {
-					matchingEnginesClose = append(matchingEnginesClose, result)
-				}
-				close(doneClose)
-
-				if len(matchingEnginesClose) > 0 {
-					file, err := os.OpenFile("matching_engines.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-					if err != nil {
-						fmt.Printf("Fout bij het openen van bestand: %v\n", err)
-						continue
-					}
-					defer file.Close()
-
-					sort.Slice(matchingEnginesClose, func(i, j int) bool {
-						return matchingEnginesClose[i].score > matchingEnginesClose[j].score
-					})
-
-					for _, result := range matchingEnginesClose {
-						_, err := file.WriteString(fmt.Sprintf("%s (score: %d)\n", result.engine, result.score))
-						if err != nil {
-							fmt.Printf("Fout bij het schrijven naar bestand: %v\n", err)
-							break
-						}
-					}
-
-					fmt.Printf("We found %d engines / %d total generated engines that never lose (win or draw) from all input engines\n",
-						len(matchingEnginesClose), len(generatedEngines))
-				} else {
-					fmt.Println("No engines found that never lose against all input engines")
-				}
-			} else {
-				fmt.Printf("No engines found that %s against all input engines\n", strings.ToLower(expectedResult))
-			}
+			fmt.Println("Geen engines geëvalueerd.")
 		}
 	}
 	fmt.Println("Gestopt.")
