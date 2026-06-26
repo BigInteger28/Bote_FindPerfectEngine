@@ -12,15 +12,23 @@ import (
 	"time"
 )
 
-// **elementsDepth** definieert de transformaties van elementen op verschillende dieptes
-var elementsDepth = map[byte]map[int]byte{
-	'W': {1: 'L', 2: 'A', 3: 'V', 4: 'W'},
-	'V': {1: 'W', 2: 'L', 3: 'A', 4: 'V'},
-	'A': {1: 'V', 2: 'W', 3: 'L', 4: 'A'},
-	'L': {1: 'A', 2: 'V', 3: 'W', 4: 'L'},
+// **elementsDepthArray** en **moveToIndexArray**: arrays ipv maps voor snelle hot-path lookups
+var elementsDepthArray [256][4]byte
+var moveToIndexArray [256]int
+
+func init() {
+	elementsDepthArray['W'] = [4]byte{'L', 'A', 'V', 'W'}
+	elementsDepthArray['V'] = [4]byte{'W', 'L', 'A', 'V'}
+	elementsDepthArray['A'] = [4]byte{'V', 'W', 'L', 'A'}
+	elementsDepthArray['L'] = [4]byte{'A', 'V', 'W', 'L'}
+	moveToIndexArray['W'] = 0
+	moveToIndexArray['V'] = 1
+	moveToIndexArray['A'] = 2
+	moveToIndexArray['L'] = 3
+	moveToIndexArray['D'] = 4
 }
 
-// **moveWins** definieert bitwise wie wint (1 = move1 wint, 2 = move2 wint, 0 = gelijk)
+// **moveWins** definieert wie wint (1 = move1 wint, 2 = move2 wint, 0 = gelijk)
 var moveWins = [5][5]uint8{
 	{0, 1, 0, 2, 0}, // W vs W,V,A,L,D
 	{2, 0, 1, 0, 0}, // V
@@ -29,14 +37,8 @@ var moveWins = [5][5]uint8{
 	{0, 0, 0, 0, 0}, // D
 }
 
-// **moveToIndex** converteert een move naar een index
-var moveToIndex = map[byte]int{
-	'W': 0,
-	'V': 1,
-	'A': 2,
-	'L': 3,
-	'D': 4,
-}
+// **printMu** serialiseert prints over goroutines
+var printMu sync.Mutex
 
 // **depthToElement** converteert een diepte naar een element (alleen dieptes 1-5)
 var depthToElement = [5]byte{'W', 'V', 'A', 'L', 'D'}
@@ -96,23 +98,19 @@ func getElementByDepth(prevElement byte, depth int) byte {
 	if prevElement == 'D' {
 		prevElement = 'L'
 	}
-	next, ok := elementsDepth[prevElement][depth]
-	if !ok {
-		return 0
-	}
-	return next
+	return elementsDepthArray[prevElement][depth-1]
 }
 
 // **chooseAvailableElement** kiest een beschikbaar element of alternatief met diepte 1 fallback
 func chooseAvailableElement(target byte, available *[5]int) byte {
-	targetIdx := moveToIndex[target]
+	targetIdx := moveToIndexArray[target]
 	if available[targetIdx] > 0 {
 		return target
 	}
 	current := target
 	for i := 0; i < 5; i++ {
-		current = elementsDepth[current][1]
-		currentIdx := moveToIndex[current]
+		current = elementsDepthArray[current][0] // depth 1 = index 0
+		currentIdx := moveToIndexArray[current]
 		if available[currentIdx] > 0 {
 			return current
 		}
@@ -125,9 +123,8 @@ func chooseAvailableElement(target byte, available *[5]int) byte {
 
 // **getLastElement** bepaalt het resterende element voor de 13e zet
 func getLastElement(available *[5]int) byte {
-	candidates := [5]byte{'W', 'V', 'A', 'L', 'D'}
-	for _, c := range candidates {
-		if available[moveToIndex[c]] > 0 {
+	for i, c := range depthToElement {
+		if available[i] > 0 {
 			return c
 		}
 	}
@@ -136,12 +133,7 @@ func getLastElement(available *[5]int) byte {
 
 // **determineWinner** bepaalt de winnaar met bitwise operaties
 func determineWinner(move1, move2 byte) int {
-	move1Idx, ok1 := moveToIndex[move1]
-	move2Idx, ok2 := moveToIndex[move2]
-	if !ok1 || !ok2 {
-		return 0 // Ongeldige moves, geen winnaar
-	}
-	return int(moveWins[move1Idx][move2Idx])
+	return int(moveWins[moveToIndexArray[move1]][moveToIndexArray[move2]])
 }
 
 // **simulateDepthGame** simuleert een spel met diepte-gebaseerde codes
@@ -241,10 +233,6 @@ func simulateFixedGame(engine1, engine2 string) (p1Score, p2Score int) {
 
 	for i := 0; i < 13; i++ {
 		move1, move2 := engine1[i], engine2[i]
-		validMoves := map[byte]bool{'W': true, 'V': true, 'A': true, 'L': true, 'D': true}
-		if !validMoves[move1] || !validMoves[move2] {
-			return -1, -1
-		}
 		winner := determineWinner(move1, move2)
 		if winner == 1 {
 			p1Score++
@@ -332,13 +320,13 @@ func simulateDepthGameToMoves(engine string, opponent string) (moves [13]byte) {
 		}
 		move := chooseAvailableElement(target, &p.available)
 		if move != 0 {
-			p.available[moveToIndex[move]]--
+			p.available[moveToIndexArray[move]]--
 			moves[p.moveCount] = move
 			p.moveCount++
 		} else {
 			move = getLastElement(&p.available)
 			if move != 0 {
-				p.available[moveToIndex[move]]--
+				p.available[moveToIndexArray[move]]--
 				moves[p.moveCount] = move
 				p.moveCount++
 			}
@@ -347,7 +335,7 @@ func simulateDepthGameToMoves(engine string, opponent string) (moves [13]byte) {
 
 	move := getLastElement(&p.available)
 	if move != 0 {
-		p.available[moveToIndex[move]]--
+		p.available[moveToIndexArray[move]]--
 		moves[p.moveCount] = move
 	} else {
 		moves[p.moveCount] = 'W'
@@ -361,8 +349,6 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
     h := &minHeap{}
     heap.Init(h)
     maxSize := 10000
-
-    var printMu sync.Mutex // Mutex om overlappende prints te voorkomen
 
     for _, engine := range engines {
         totalScore := 0
@@ -410,14 +396,12 @@ func evaluateBatch(engines []string, inputEngines []string, top10000Chan chan<- 
             }
         }
 
-        if totalScore != 0 {
-            result := engineResult{engine: engine, score: totalScore}
-            if h.Len() < maxSize {
-                heap.Push(h, result)
-            } else if totalScore > (*h)[0].score {
-                heap.Pop(h)
-                heap.Push(h, result)
-            }
+        result := engineResult{engine: engine, score: totalScore}
+        if h.Len() < maxSize {
+            heap.Push(h, result)
+        } else if totalScore > (*h)[0].score {
+            heap.Pop(h)
+            heap.Push(h, result)
         }
     }
 
